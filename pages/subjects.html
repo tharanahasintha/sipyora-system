@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Subjects – Sipyora Institute</title>
+  <link rel="stylesheet" href="../css/style.css"/>
+</head>
+<body>
+  <div class="toast-container"></div>
+
+  <div class="modal-overlay" id="addSubjectModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>📚 Add Subject</h3>
+        <button class="close-btn" onclick="closeModal('addSubjectModal')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group"><label>Subject Name *</label><input type="text" id="subName" placeholder="e.g. Mathematics"/></div>
+        <div class="form-group"><label>Description</label><input type="text" id="subDesc" placeholder="Optional description"/></div>
+        <div class="form-group">
+          <label>Available for Grades</label>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;" id="subGradeBoxes"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('addSubjectModal')">Cancel</button>
+        <button class="btn btn-primary" onclick="addSubject()">Add Subject</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+  <script src="../js/firebase.js"></script>
+  <script src="../js/auth.js"></script>
+  <script src="../js/layout.js"></script>
+  <script>
+    function onPageReady(user, role) {
+      if (role !== 'admin') {
+        document.getElementById('pageContent').innerHTML = '<div class="empty-state"><div class="icon">🔒</div><h3>Admin Only</h3></div>';
+        return;
+      }
+      document.getElementById('topbarActions').innerHTML = '<button class="btn btn-primary" onclick="openAddModal()">+ Add Subject</button>';
+
+      // Build grade checkboxes
+      var gc = document.getElementById('subGradeBoxes');
+      gc.innerHTML = [6,7,8,9,10,11].map(function(g) {
+        return '<div style="display:flex;align-items:center;gap:6px;padding:6px 12px;background:var(--primary);border-radius:8px;border:1px solid var(--border);"><input type="checkbox" id="sg' + g + '" value="' + g + '" style="accent-color:var(--accent);" checked/><label for="sg' + g + '" style="font-size:0.85rem;cursor:pointer;">Grade ' + g + '</label></div>';
+      }).join('');
+
+      loadSubjects();
+    }
+
+    function openAddModal() {
+      document.getElementById('subName').value = '';
+      document.getElementById('subDesc').value = '';
+      // reset all checked
+      [6,7,8,9,10,11].forEach(function(g) {
+        var el = document.getElementById('sg' + g);
+        if (el) el.checked = true;
+      });
+      openModal('addSubjectModal');
+    }
+
+    function loadSubjects() {
+      db.collection('subjects').orderBy('name').get().then(function(snap) {
+        var subjects = snap.docs.map(function(d) { return Object.assign({id: d.id}, d.data()); });
+        var content = document.getElementById('pageContent');
+
+        var cards = subjects.length === 0
+          ? '<div class="empty-state"><div class="icon">📚</div><h3>No subjects yet</h3><p>Add your first subject</p></div>'
+          : subjects.map(function(s) {
+            var grades = (s.grades||[]).map(function(g) { return '<span class="badge badge-info">Grade ' + g + '</span>'; }).join('');
+            return '<div class="card" style="padding:20px;"><div style="font-size:2rem;margin-bottom:12px;">📚</div><h3 style="font-size:1rem;margin-bottom:6px;">' + s.name + '</h3><p style="color:var(--text-muted);font-size:0.83rem;margin-bottom:12px;">' + (s.description||'No description') + '</p><div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:14px;">' + grades + '</div><button class="btn btn-sm btn-danger" onclick="removeSubject(\'' + s.id + '\',\'' + s.name.replace(/'/g,'') + '\')">🗑️ Remove</button></div>';
+          }).join('');
+
+        var feeTable = Object.entries(PAYMENT_RULES).map(function(entry) {
+          var grade = entry[0]; var rule = entry[1];
+          return '<tr><td><span class="badge badge-info">Grade ' + grade + '</span></td><td>' + formatRs(rule.base) + '</td><td style="color:var(--success);font-weight:600;">' + formatRs(rule.bundle) + '/subject</td><td style="color:var(--accent2);">' + formatRs(rule.base - rule.bundle) + ' off/subject</td></tr>';
+        }).join('');
+
+        content.innerHTML = '<div class="stats-grid" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr));margin-bottom:24px;">' + cards + '</div><div class="card"><div class="card-header"><h3>📊 Fee Structure Reference</h3></div><div class="table-wrap"><table><thead><tr><th>Grade</th><th>Per Subject</th><th>5+ Subjects (Bundle)</th><th>Savings</th></tr></thead><tbody>' + feeTable + '</tbody></table></div></div>';
+      });
+    }
+
+    function addSubject() {
+      var name = document.getElementById('subName').value.trim();
+      var description = document.getElementById('subDesc').value.trim();
+      var grades = Array.from(document.querySelectorAll('[id^="sg"]:checked')).map(function(c) { return parseInt(c.value); });
+      if (!name) return showToast('Subject name required', 'error');
+      db.collection('subjects').add({ name: name, description: description, grades: grades, createdAt: firebase.firestore.FieldValue.serverTimestamp() })
+        .then(function() {
+          showToast('Subject added!', 'success');
+          closeModal('addSubjectModal');
+          loadSubjects();
+        }).catch(function(e) { showToast('Error: ' + e.message, 'error'); });
+    }
+
+    function removeSubject(id, name) {
+      if (!confirm('Remove subject "' + name + '"? This will affect enrolled students.')) return;
+      db.collection('subjects').doc(id).delete().then(function() {
+        showToast('Subject removed', 'info');
+        loadSubjects();
+      }).catch(function(e) { showToast('Error: ' + e.message, 'error'); });
+    }
+
+    buildLayout('Subjects', 'subjects', '../');
+  </script>
+</body>
+</html>

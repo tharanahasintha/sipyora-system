@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Attendance – Sipyora Institute</title>
+  <link rel="stylesheet" href="../css/style.css"/>
+</head>
+<body>
+  <div class="toast-container"></div>
+
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+  <script src="../js/firebase.js"></script>
+  <script src="../js/auth.js"></script>
+  <script src="../js/layout.js"></script>
+  <script>
+    var allStudents = [];
+    var allSubjects = [];
+    var attendanceMap = {};
+    var selectedDate = new Date().toISOString().split('T')[0];
+    var selectedSubject = '';
+    var selectedGrade = '';
+    var userEmail = '';
+
+    function onPageReady(user, role) {
+      userEmail = user.email;
+      Promise.all([
+        db.collection('students').orderBy('name').get(),
+        db.collection('subjects').orderBy('name').get()
+      ]).then(function(results) {
+        allStudents = results[0].docs.map(function(d) { return Object.assign({id: d.id}, d.data()); });
+        allSubjects = results[1].docs.map(function(d) { return Object.assign({id: d.id}, d.data()); });
+        renderPage();
+      });
+    }
+
+    function renderPage() {
+      var subjectOptions = allSubjects.map(function(s) { return '<option value="' + s.name + '">' + s.name + '</option>'; }).join('');
+      var gradeOptions = [6,7,8,9,10,11].map(function(g) { return '<option value="' + g + '">Grade ' + g + '</option>'; }).join('');
+
+      document.getElementById('pageContent').innerHTML = '\
+        <div class="card" style="margin-bottom:20px;">\
+          <div class="card-body">\
+            <div class="filters-row" style="flex-wrap:wrap;gap:12px;">\
+              <div>\
+                <label style="font-size:0.78rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:6px;">Date</label>\
+                <input type="date" id="attDate" value="' + selectedDate + '" onchange="changeDate(this.value)" style="padding:10px 14px;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:\'DM Sans\',sans-serif;font-size:0.9rem;outline:none;"/>\
+              </div>\
+              <div>\
+                <label style="font-size:0.78rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:6px;">Subject</label>\
+                <select id="attSubject" onchange="changeSubject(this.value)" style="padding:10px 14px;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:\'DM Sans\',sans-serif;font-size:0.9rem;outline:none;">\
+                  <option value="">All Subjects</option>' + subjectOptions + '\
+                </select>\
+              </div>\
+              <div>\
+                <label style="font-size:0.78rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:6px;">Grade</label>\
+                <select id="attGrade" onchange="changeGrade(this.value)" style="padding:10px 14px;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:\'DM Sans\',sans-serif;font-size:0.9rem;outline:none;">\
+                  <option value="">All Grades</option>' + gradeOptions + '\
+                </select>\
+              </div>\
+              <div style="align-self:flex-end;display:flex;gap:8px;">\
+                <button class="btn btn-success" onclick="markAllPresent()">✅ All Present</button>\
+                <button class="btn btn-primary" onclick="saveAttendance()">💾 Save</button>\
+              </div>\
+            </div>\
+          </div>\
+        </div>\
+        <div class="card">\
+          <div class="card-header">\
+            <h3 id="attHeader">Attendance – ' + formatDisplayDate(selectedDate) + '</h3>\
+            <div id="attSummary"></div>\
+          </div>\
+          <div id="attendanceList" class="card-body"><div class="loading"><div class="spinner"></div></div></div>\
+        </div>';
+
+      loadAttendanceForDate();
+    }
+
+    function formatDisplayDate(d) {
+      return new Date(d + 'T00:00:00').toLocaleDateString('en-GB', {weekday:'long',day:'numeric',month:'long',year:'numeric'});
+    }
+
+    function loadAttendanceForDate() {
+      var list = document.getElementById('attendanceList');
+      if (list) list.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+      db.collection('attendance').where('date', '==', selectedDate).get().then(function(snap) {
+        attendanceMap = {};
+        snap.docs.forEach(function(d) {
+          var data = d.data();
+          attendanceMap[data.studentId + '_' + data.subject] = { status: data.status, docId: d.id };
+        });
+        renderAttendanceList();
+      });
+    }
+
+    function renderAttendanceList() {
+      var list = document.getElementById('attendanceList');
+      var students = allStudents.filter(function(s) {
+        var subMatch = !selectedSubject || (s.subjects||[]).indexOf(selectedSubject) !== -1;
+        var gradeMatch = !selectedGrade || String(s.grade) === String(selectedGrade);
+        return subMatch && gradeMatch;
+      });
+
+      if (students.length === 0) {
+        list.innerHTML = '<div class="empty-state"><div class="icon">📋</div><h3>No students match filters</h3></div>';
+        return;
+      }
+
+      var html = '<div class="attendance-grid">';
+      students.forEach(function(s) {
+        var subjects = selectedSubject
+          ? (s.subjects||[]).filter(function(sub) { return sub === selectedSubject; })
+          : (s.subjects || []);
+        subjects.forEach(function(sub) {
+          var key = s.id + '_' + sub;
+          var status = attendanceMap[key] ? attendanceMap[key].status : '';
+          html += '<div class="attendance-row">' +
+            '<div><strong>' + s.name + '</strong><div style="font-size:0.78rem;color:var(--text-muted);">Grade ' + s.grade + ' • ' + sub + '</div></div>' +
+            '<div class="attendance-toggle">' +
+            '<button class="att-btn ' + (status==='present'?'present':'') + '" data-sid="' + s.id + '" data-sub="' + sub + '" data-status="present" onclick="setAtt(this)">Present</button>' +
+            '<button class="att-btn ' + (status==='absent'?'absent':'') + '" data-sid="' + s.id + '" data-sub="' + sub + '" data-status="absent" onclick="setAtt(this)">Absent</button>' +
+            '</div></div>';
+        });
+      });
+      html += '</div>';
+      list.innerHTML = html;
+
+      // Update summary
+      var presentCount = 0;
+      Object.values(attendanceMap).forEach(function(v) { if (v.status === 'present') presentCount++; });
+      var summaryEl = document.getElementById('attSummary');
+      if (summaryEl) summaryEl.innerHTML = '<span class="badge badge-success">✓ ' + presentCount + ' Present</span>';
+    }
+
+    function setAtt(btn) {
+      var sid = btn.getAttribute('data-sid');
+      var sub = btn.getAttribute('data-sub');
+      var status = btn.getAttribute('data-status');
+      var key = sid + '_' + sub;
+      if (!attendanceMap[key]) attendanceMap[key] = {};
+      attendanceMap[key].status = status;
+      var row = btn.closest('.attendance-row');
+      row.querySelectorAll('.att-btn').forEach(function(b) { b.classList.remove('present','absent'); });
+      btn.classList.add(status);
+    }
+
+    function markAllPresent() {
+      document.querySelectorAll('.att-btn[data-status="present"]').forEach(function(btn) {
+        var sid = btn.getAttribute('data-sid');
+        var sub = btn.getAttribute('data-sub');
+        var key = sid + '_' + sub;
+        if (!attendanceMap[key]) attendanceMap[key] = {};
+        attendanceMap[key].status = 'present';
+        var row = btn.closest('.attendance-row');
+        row.querySelectorAll('.att-btn').forEach(function(b) { b.classList.remove('present','absent'); });
+        btn.classList.add('present');
+      });
+      showToast('All marked present', 'success');
+    }
+
+    function saveAttendance() {
+      var batch = db.batch();
+      var count = 0;
+      Object.keys(attendanceMap).forEach(function(key) {
+        var data = attendanceMap[key];
+        if (!data.status) return;
+        var parts = key.split('_');
+        var studentId = parts[0];
+        var subject = parts.slice(1).join('_');
+        count++;
+        if (data.docId) {
+          batch.update(db.collection('attendance').doc(data.docId), { status: data.status, markedBy: userEmail });
+        } else {
+          var ref = db.collection('attendance').doc();
+          batch.set(ref, {
+            studentId: studentId, subject: subject, date: selectedDate,
+            month: selectedDate.substring(0, 7),
+            status: data.status, markedBy: userEmail,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+        }
+      });
+      batch.commit().then(function() {
+        showToast('Attendance saved (' + count + ' records)!', 'success');
+        loadAttendanceForDate();
+      }).catch(function(e) { showToast('Error: ' + e.message, 'error'); });
+    }
+
+    function changeDate(v) {
+      selectedDate = v;
+      var h = document.getElementById('attHeader');
+      if (h) h.textContent = 'Attendance – ' + formatDisplayDate(v);
+      loadAttendanceForDate();
+    }
+    function changeSubject(v) { selectedSubject = v; renderAttendanceList(); }
+    function changeGrade(v) { selectedGrade = v; renderAttendanceList(); }
+
+    buildLayout('Attendance', 'attendance', '../');
+  </script>
+</body>
+</html>

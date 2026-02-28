@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Reports – Sipyora Institute</title>
+  <link rel="stylesheet" href="../css/style.css"/>
+</head>
+<body>
+  <div class="toast-container"></div>
+
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.29/jspdf.plugin.autotable.min.js"></script>
+  <script src="../js/firebase.js"></script>
+  <script src="../js/auth.js"></script>
+  <script src="../js/layout.js"></script>
+  <script>
+    var allTeachers = [];
+    var reportData = null;
+    var selectedMonth = getMonthYear();
+
+    function onPageReady(user, role) {
+      if (role !== 'admin') {
+        document.getElementById('pageContent').innerHTML = '<div class="empty-state"><div class="icon">🔒</div><h3>Admin Only</h3></div>';
+        return;
+      }
+      db.collection('teachers').orderBy('name').get().then(function(snap) {
+        allTeachers = snap.docs.map(function(d) { return Object.assign({id: d.id}, d.data()); });
+        renderForm();
+      });
+    }
+
+    function renderForm() {
+      document.getElementById('pageContent').innerHTML = '\
+        <div class="card" style="margin-bottom:24px;">\
+          <div class="card-header"><h3>📊 Generate Monthly Report</h3></div>\
+          <div class="card-body">\
+            <div class="filters-row">\
+              <div>\
+                <label style="font-size:0.78rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:6px;">Select Month</label>\
+                <input type="month" id="reportMonth" value="' + selectedMonth + '" style="padding:10px 14px;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:\'DM Sans\',sans-serif;font-size:0.9rem;outline:none;"/>\
+              </div>\
+              <div style="align-self:flex-end;">\
+                <button class="btn btn-primary" onclick="generateReport()">📊 Generate Report</button>\
+              </div>\
+            </div>\
+          </div>\
+        </div>\
+        <div id="reportOutput"></div>';
+    }
+
+    function generateReport() {
+      selectedMonth = document.getElementById('reportMonth').value;
+      var output = document.getElementById('reportOutput');
+      output.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+      Promise.all([
+        db.collection('payments').where('month','==',selectedMonth).get(),
+        db.collection('attendance').where('month','==',selectedMonth).get(),
+        db.collection('students').get()
+      ]).then(function(results) {
+        var payments = results[0].docs.map(function(d) { return Object.assign({id: d.id}, d.data()); });
+        var attendance = results[1].docs.map(function(d) { return d.data(); });
+        var studentsMap = {};
+        results[2].docs.forEach(function(d) { studentsMap[d.id] = Object.assign({id: d.id}, d.data()); });
+
+        var totalRevenue = payments.reduce(function(s, p) { return s + (p.amount || 0); }, 0);
+        var totalTeacher = calculateTeacherPay(totalRevenue);
+
+        var teacherReports = allTeachers.map(function(teacher) {
+          var tSubjects = teacher.subjects || [];
+          var tGrades = teacher.grades || [];
+          var tStudents = Object.values(studentsMap).filter(function(s) {
+            var subMatch = (s.subjects||[]).some(function(sub) { return tSubjects.indexOf(sub) !== -1; });
+            var gradeMatch = tGrades.length === 0 || tGrades.indexOf(s.grade) !== -1;
+            return subMatch && gradeMatch;
+          });
+          var tStudentIds = tStudents.map(function(s) { return s.id; });
+          var tPayments = payments.filter(function(p) { return tStudentIds.indexOf(p.studentId) !== -1; });
+
+          // CORRECT SPLIT: teacher only earns for their own subjects.
+          // Saman pays Rs 2000 for ICT + Maths (2 subjects, Rs 1000 each).
+          // ICT teacher gets Rs 1000, Maths teacher gets Rs 1000. Not Rs 2000 each.
+          var tTotal = tPayments.reduce(function(sum, p) {
+            var student = studentsMap[p.studentId];
+            if (!student) return sum;
+            var allStudentSubs = student.subjects || [];
+            var totalSubs = allStudentSubs.length;
+            if (totalSubs === 0) return sum;
+            // How many of this student's subjects belong to this teacher
+            var teacherSubsForStudent = allStudentSubs.filter(function(sub) {
+              return tSubjects.indexOf(sub) !== -1;
+            }).length;
+            // Proportional share of this payment
+            return sum + (p.amount || 0) * (teacherSubsForStudent / totalSubs);
+          }, 0);
+          var tTeacherShare = calculateTeacherPay(tTotal);
+          var tAttendance = attendance.filter(function(a) {
+            return tSubjects.indexOf(a.subject) !== -1 && tStudentIds.indexOf(a.studentId) !== -1;
+          });
+          var presentCount = tAttendance.filter(function(a) { return a.status === 'present'; }).length;
+          var totalAtt = tAttendance.length;
+          var attRate = totalAtt > 0 ? Math.round(presentCount / totalAtt * 100) : 0;
+          return { teacher: teacher, tStudents: tStudents, tPayments: tPayments, tTotal: tTotal, tTeacherShare: tTeacherShare, presentCount: presentCount, totalAtt: totalAtt, attRate: attRate };
+        });
+
+        reportData = { selectedMonth: selectedMonth, payments: payments, attendance: attendance, students: studentsMap, totalRevenue: totalRevenue, totalTeacher: totalTeacher, teacherReports: teacherReports };
+
+        var paidIds = {};
+        payments.forEach(function(p) { paidIds[p.studentId] = true; });
+        var unpaid = Object.values(studentsMap).filter(function(s) { return !paidIds[s.id]; });
+
+        var teacherHtml = teacherReports.map(function(r) {
+          var subChips = (r.teacher.subjects||[]).map(function(s) { return '<span class="chip">' + s + '</span>'; }).join('');
+          var studentRows = r.tStudents.length === 0
+            ? '<p style="color:var(--text-muted);font-size:0.85rem;">No students assigned.</p>'
+            : '<div class="table-wrap"><table><thead><tr><th>Student</th><th>Grade</th><th>Subjects</th><th>Paid This Month</th></tr></thead><tbody>' +
+              r.tStudents.map(function(s) {
+                var studentPayments = r.tPayments.filter(function(p) { return p.studentId === s.id; });
+                var totalPaid = studentPayments.reduce(function(sum,p) { return sum + p.amount; }, 0);
+                // Calculate only THIS teacher's share of what this student paid
+                var allSubs = s.subjects || [];
+                var totalSubs = allSubs.length;
+                var teacherSubCount = allSubs.filter(function(sub) { return (r.teacher.subjects||[]).indexOf(sub) !== -1; }).length;
+                var teacherPortion = totalSubs > 0 ? totalPaid * (teacherSubCount / totalSubs) : 0;
+                var relevantSubs = allSubs.filter(function(sub) { return (r.teacher.subjects||[]).indexOf(sub) !== -1; }).map(function(sub) { return '<span class="chip">' + sub + '</span>'; }).join('');
+                var perSubAmt = totalSubs > 0 ? (totalPaid / totalSubs) : 0;
+                var subLabel = relevantSubs + (teacherSubCount > 0 && totalPaid > 0 ? ' <small style="color:var(--text-muted);">(Rs ' + Math.round(perSubAmt) + '/sub)</small>' : '');
+                return '<tr><td>' + s.name + '</td><td><span class="badge badge-info">Grade ' + s.grade + '</span></td><td><div class="subject-chips" style="align-items:center;">' + subLabel + '</div></td><td style="font-weight:600;color:' + (teacherPortion > 0 ? 'var(--success)' : 'var(--danger)') + ';">' + (teacherPortion > 0 ? formatRs(Math.round(teacherPortion)) : 'Not Paid') + '</td></tr>';
+              }).join('') + '</tbody></table></div>';
+
+          return '<div class="report-card"><div class="report-header-info"><div><h3 style="font-size:1.2rem;">' + r.teacher.name + '</h3><p style="color:var(--text-muted);font-size:0.85rem;margin-top:4px;">' + r.teacher.email + '</p><div class="subject-chips" style="margin-top:8px;">' + subChips + '</div></div><div style="text-align:right;"><div style="font-size:2rem;font-weight:700;font-family:\'DM Serif Display\',serif;color:var(--accent2);">' + formatRs(r.tTeacherShare) + '</div><div style="font-size:0.8rem;color:var(--text-muted);">Salary (75% of ' + formatRs(r.tTotal) + ')</div></div></div><div class="payment-summary" style="margin-bottom:16px;"><div class="pay-box"><div class="amount" style="font-size:1rem;">' + r.tStudents.length + '</div><div class="label">Students</div></div><div class="pay-box"><div class="amount" style="font-size:1rem;">' + r.tPayments.length + '</div><div class="label">Payments</div></div><div class="pay-box"><div class="amount" style="font-size:1rem;">' + r.attRate + '%</div><div class="label">Attendance Rate</div></div><div class="pay-box"><div class="amount" style="font-size:1rem;">' + r.presentCount + '/' + r.totalAtt + '</div><div class="label">Sessions</div></div></div>' + studentRows + '</div>';
+        }).join('');
+
+        var unpaidHtml = unpaid.length > 0 ? '<h3 style="font-size:1.1rem;margin:24px 0 16px;font-family:\'DM Serif Display\',serif;color:var(--danger);">⚠️ Unpaid Students (' + unpaid.length + ')</h3><div class="card"><div class="table-wrap"><table><thead><tr><th>Student</th><th>Grade</th><th>Expected Fee</th><th>Subjects</th></tr></thead><tbody>' + unpaid.map(function(s) { return '<tr><td>' + s.name + '</td><td><span class="badge badge-info">Grade ' + s.grade + '</span></td><td style="color:var(--danger);font-weight:600;">' + formatRs(s.monthlyFee) + '</td><td><div class="subject-chips">' + (s.subjects||[]).map(function(sub) { return '<span class="chip">' + sub + '</span>'; }).join('') + '</div></td></tr>'; }).join('') + '</tbody></table></div></div>' : '';
+
+        output.innerHTML = '\
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:20px;">\
+            <h2 style="font-family:\'DM Serif Display\',serif;font-size:1.6rem;">Report: ' + monthLabel(selectedMonth) + '</h2>\
+            <button class="btn btn-primary" onclick="exportPDF()">📄 Export PDF</button>\
+          </div>\
+          <div class="stats-grid" style="margin-bottom:24px;">\
+            <div class="stat-card accent"><div class="stat-icon">💰</div><div class="stat-value" style="font-size:1.4rem;">' + formatRs(totalRevenue) + '</div><div class="stat-label">Total Revenue</div></div>\
+            <div class="stat-card warning"><div class="stat-icon">👩‍🏫</div><div class="stat-value" style="font-size:1.4rem;">' + formatRs(totalTeacher) + '</div><div class="stat-label">Teacher Payouts</div></div>\
+            <div class="stat-card success"><div class="stat-icon">🏛️</div><div class="stat-value" style="font-size:1.4rem;">' + formatRs(totalRevenue - totalTeacher) + '</div><div class="stat-label">Institute Share (25%)</div></div>\
+            <div class="stat-card info"><div class="stat-icon">📋</div><div class="stat-value">' + payments.length + '</div><div class="stat-label">Payments Collected</div></div>\
+          </div>\
+          <h3 style="font-size:1.1rem;margin-bottom:16px;font-family:\'DM Serif Display\',serif;">Teacher-wise Salary Breakdown</h3>\
+          ' + teacherHtml + unpaidHtml;
+      }).catch(function(e) {
+        output.innerHTML = '<div class="empty-state"><div class="icon">⚠️</div><h3>Error</h3><p>' + e.message + '</p></div>';
+      });
+    }
+
+    function exportPDF() {
+      if (!reportData) return showToast('Generate a report first', 'error');
+      var jsPDF = window.jspdf.jsPDF;
+      var doc = new jsPDF('p', 'mm', 'a4');
+      var pageW = doc.internal.pageSize.getWidth();
+      var month = monthLabel(reportData.selectedMonth);
+
+      doc.setFillColor(26, 26, 46);
+      doc.rect(0, 0, pageW, 40, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(22); doc.setFont('helvetica', 'bold');
+      doc.text('SIPYORA INSTITUTE', 14, 18);
+      doc.setFontSize(11); doc.setFont('helvetica', 'normal');
+      doc.text('Monthly Report – ' + month, 14, 28);
+      doc.text('Generated: ' + new Date().toLocaleDateString('en-GB'), 14, 35);
+
+      var y = 50;
+      doc.setTextColor(30, 30, 30);
+      doc.setFontSize(14); doc.setFont('helvetica', 'bold');
+      doc.text('Financial Summary', 14, y); y += 8;
+      doc.autoTable({
+        startY: y,
+        head: [['Metric', 'Amount']],
+        body: [
+          ['Total Revenue', 'Rs ' + Number(reportData.totalRevenue).toLocaleString('en-IN')],
+          ['Total Teacher Payouts (75%)', 'Rs ' + Number(reportData.totalTeacher).toLocaleString('en-IN')],
+          ['Institute Share (25%)', 'Rs ' + Number(reportData.totalRevenue - reportData.totalTeacher).toLocaleString('en-IN')],
+          ['Total Payments Collected', String(reportData.payments.length)]
+        ],
+        theme: 'striped',
+        headStyles: { fillColor: [233, 69, 96], textColor: 255 },
+        styles: { fontSize: 10 }
+      });
+      y = doc.lastAutoTable.finalY + 12;
+
+      doc.setFontSize(14); doc.setFont('helvetica', 'bold');
+      doc.text('Teacher Salary Breakdown', 14, y); y += 8;
+      doc.autoTable({
+        startY: y,
+        head: [['Teacher', 'Subjects', 'Students', 'Total Collected', 'Salary (75%)', 'Attendance']],
+        body: reportData.teacherReports.map(function(r) {
+          return [r.teacher.name, (r.teacher.subjects||[]).join(', '), r.tStudents.length, 'Rs ' + Number(r.tTotal).toLocaleString('en-IN'), 'Rs ' + Number(r.tTeacherShare).toLocaleString('en-IN'), r.attRate + '%'];
+        }),
+        theme: 'striped',
+        headStyles: { fillColor: [15, 52, 96], textColor: 255 },
+        styles: { fontSize: 9 }
+      });
+
+      reportData.teacherReports.forEach(function(r) {
+        if (r.tStudents.length === 0) return;
+        doc.addPage();
+        doc.setFillColor(26, 26, 46); doc.rect(0, 0, pageW, 30, 'F');
+        doc.setTextColor(255, 255, 255); doc.setFontSize(16); doc.setFont('helvetica', 'bold');
+        doc.text(r.teacher.name + ' – ' + month, 14, 14);
+        doc.setFontSize(10); doc.setFont('helvetica', 'normal');
+        doc.text('Salary: Rs ' + Number(r.tTeacherShare).toLocaleString('en-IN') + ' | Subjects: ' + (r.teacher.subjects||[]).join(', '), 14, 24);
+        doc.setTextColor(30, 30, 30);
+        doc.autoTable({
+          startY: 38,
+          head: [['Student', 'Grade', 'Subjects', 'Paid', 'Teacher Share']],
+          body: r.tStudents.map(function(s) {
+            var studentPayments = r.tPayments.filter(function(p) { return p.studentId === s.id; });
+            var totalPaid = studentPayments.reduce(function(sum,p) { return sum + p.amount; }, 0);
+            var allSubs = s.subjects || [];
+            var totalSubs = allSubs.length;
+            var teacherSubCount = allSubs.filter(function(sub) { return (r.teacher.subjects||[]).indexOf(sub) !== -1; }).length;
+            var teacherPortion = totalSubs > 0 ? Math.round(totalPaid * (teacherSubCount / totalSubs)) : 0;
+            var relevantSubs = allSubs.filter(function(sub) { return (r.teacher.subjects||[]).indexOf(sub) !== -1; }).join(', ');
+            var perSubNote = totalSubs > 0 && totalPaid > 0 ? ' (Rs ' + Math.round(totalPaid/totalSubs) + '/sub)' : '';
+            return [s.name, 'Grade ' + s.grade, relevantSubs + perSubNote, teacherPortion > 0 ? 'Rs ' + Number(teacherPortion).toLocaleString('en-IN') : 'Not Paid', teacherPortion > 0 ? 'Rs ' + Number(Math.round(teacherPortion * TEACHER_CUT)).toLocaleString('en-IN') : '—'];
+          }),
+          theme: 'striped',
+          headStyles: { fillColor: [22, 33, 62], textColor: 255 },
+          styles: { fontSize: 9 }
+        });
+      });
+
+      var paidIds = {};
+      reportData.payments.forEach(function(p) { paidIds[p.studentId] = true; });
+      var unpaid = Object.values(reportData.students).filter(function(s) { return !paidIds[s.id]; });
+      if (unpaid.length > 0) {
+        doc.addPage();
+        doc.setFillColor(231, 76, 60); doc.rect(0, 0, pageW, 25, 'F');
+        doc.setTextColor(255, 255, 255); doc.setFontSize(16); doc.setFont('helvetica', 'bold');
+        doc.text('Unpaid Students – ' + month, 14, 17);
+        doc.setTextColor(30, 30, 30);
+        doc.autoTable({
+          startY: 32,
+          head: [['Student', 'Grade', 'Expected Fee', 'Subjects']],
+          body: unpaid.map(function(s) { return [s.name, 'Grade ' + s.grade, 'Rs ' + Number(s.monthlyFee).toLocaleString('en-IN'), (s.subjects||[]).join(', ')]; }),
+          theme: 'striped',
+          headStyles: { fillColor: [231, 76, 60], textColor: 255 },
+          styles: { fontSize: 9 }
+        });
+      }
+
+      doc.save('Sipyora_Report_' + reportData.selectedMonth + '.pdf');
+      showToast('PDF exported!', 'success');
+    }
+
+    buildLayout('Reports', 'reports', '../');
+  </script>
+</body>
+</html>

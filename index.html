@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Dashboard – Sipyora Institute</title>
+  <link rel="stylesheet" href="css/style.css"/>
+</head>
+<body>
+  <div class="toast-container"></div>
+  
+  <!-- Suppress source map errors -->
+  <script>
+    window.CESIUM_BASE_URL = '/';
+    window.DISABLE_SOURCE_MAP = true;
+    // Silence source map warnings
+    const originalWarn = console.warn;
+    console.warn = function(msg) {
+      if (msg && !msg.includes('source map')) {
+        originalWarn.apply(console, arguments);
+      }
+    };
+  </script>
+
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+  
+  <!-- App scripts -->
+  <script src="js/firebase.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/layout.js"></script>
+
+  <script>
+    // Define helper functions needed for the dashboard
+    function getMonthYear() {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }
+
+    function monthLabel(monthYear) {
+      const [year, month] = monthYear.split('-');
+      const date = new Date(year, month - 1);
+      return date.toLocaleString('default', { month: 'long', year: 'numeric' });
+    }
+
+    function formatRs(amount) {
+      return 'Rs. ' + amount.toLocaleString('en-LK');
+    }
+
+    // Constants
+    //const TEACHER_CUT = 0.75; // Uncomment this
+
+    // onPageReady is called by buildLayout after auth
+    function onPageReady(user, role) {
+      console.log('onPageReady called with role:', role);
+      var content = document.getElementById('pageContent');
+      
+      if (!content) {
+        console.error('pageContent element not found!');
+        return;
+      }
+
+      // Show loading state
+      content.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+      // Get all collections
+      Promise.all([
+        db.collection('students').get().catch(err => {
+          console.error('Error fetching students:', err);
+          return { size: 0, docs: [], empty: true };
+        }),
+        db.collection('teachers').get().catch(err => {
+          console.error('Error fetching teachers:', err);
+          return { size: 0, docs: [], empty: true };
+        }),
+        db.collection('subjects').get().catch(err => {
+          console.error('Error fetching subjects:', err);
+          return { size: 0, docs: [], empty: true };
+        }),
+        db.collection('payments').get().catch(err => {
+          console.error('Error fetching payments:', err);
+          return { size: 0, docs: [], empty: true };
+        })
+      ]).then(function(results) {
+        // Safely extract results
+        var students = results[0] || { size: 0, docs: [] };
+        var teachers = results[1] || { size: 0, docs: [] };
+        var subjects = results[2] || { size: 0, docs: [] };
+        var payments = results[3] || { size: 0, docs: [] };
+        
+        // Calculate total revenue for current month
+        var totalRevenue = 0;
+        const currentMonth = getMonthYear();
+        
+        if (payments.docs && Array.isArray(payments.docs)) {
+          payments.docs.forEach(function(d) { 
+            const paymentData = d.data();
+            // Only count payments for current month
+            if (paymentData.month === currentMonth) {
+              totalRevenue += (paymentData.amount || 0); 
+            }
+          });
+        }
+
+        var today = new Date().toISOString().split('T')[0];
+        
+        // Get today's attendance
+        return db.collection('attendance').where('date', '==', today).get()
+          .then(function(todayAtt) {
+            var presentToday = 0;
+            if (todayAtt && todayAtt.docs && Array.isArray(todayAtt.docs)) {
+              presentToday = todayAtt.docs.filter(function(d) { 
+                return d.data().status === 'present'; 
+              }).length;
+            }
+
+            // Render the dashboard
+            content.innerHTML = '\
+              <div class="stats-grid">\
+                <div class="stat-card accent"><div class="stat-icon">🎓</div><div class="stat-value">' + (students.size || 0) + '</div><div class="stat-label">Total Students</div></div>\
+                <div class="stat-card success"><div class="stat-icon">👩‍🏫</div><div class="stat-value">' + (teachers.size || 0) + '</div><div class="stat-label">Teachers</div></div>\
+                <div class="stat-card info"><div class="stat-icon">📚</div><div class="stat-value">' + (subjects.size || 0) + '</div><div class="stat-label">Subjects</div></div>\
+                <div class="stat-card warning"><div class="stat-icon">💰</div><div class="stat-value">' + formatRs(totalRevenue) + '</div><div class="stat-label">Revenue This Month</div></div>\
+              </div>\
+              <div class="grid-2">\
+                <div class="card">\
+                  <div class="card-header"><h3>📋 Today\'s Attendance</h3><span class="badge badge-info">' + today + '</span></div>\
+                  <div class="card-body">\
+                    <div style="text-align:center;padding:20px 0;">\
+                      <div style="font-size:3rem;font-family:\'DM Serif Display\',serif;color:var(--success);">' + presentToday + '</div>\
+                      <div style="color:var(--text-muted);">Students Present Today</div>\
+                    </div>\
+                    <a href="pages/attendance.html" class="btn btn-primary" style="margin-top:12px;">Mark Attendance →</a>\
+                  </div>\
+                </div>\
+                <div class="card">\
+                  <div class="card-header"><h3>💳 This Month</h3><span class="badge badge-success">' + monthLabel(currentMonth) + '</span></div>\
+                  <div class="card-body">\
+                    <div class="payment-summary">\
+                      <div class="pay-box"><div class="amount">' + formatRs(totalRevenue) + '</div><div class="label">Total Collected</div></div>\
+                      <div class="pay-box"><div class="amount">' + formatRs(totalRevenue * TEACHER_CUT) + '</div><div class="label">Teacher Payouts (75%)</div></div>\
+                    </div>\
+                    ' + (role === 'admin' ? '<a href="pages/payments.html" class="btn btn-primary" style="margin-top:12px;">Manage Payments →</a>' : '') + '\
+                  </div>\
+                </div>\
+              </div>\
+              <div class="card" style="margin-top:20px;">\
+                <div class="card-header"><h3>🚀 Quick Actions</h3></div>\
+                <div class="card-body" style="display:flex;flex-wrap:wrap;gap:12px;">\
+                  <a href="pages/attendance.html" class="btn btn-secondary">📋 Mark Attendance</a>\
+                  ' + (role === 'admin' ? '\
+                  <a href="pages/students.html" class="btn btn-secondary">🎓 Add Student</a>\
+                  <a href="pages/payments.html" class="btn btn-secondary">💳 Record Payment</a>\
+                  <a href="pages/reports.html" class="btn btn-secondary">📊 Generate Report</a>' : '') + '\
+                </div>\
+              </div>';
+          });
+      }).catch(function(e) {
+        console.error('Error loading dashboard data:', e);
+        content.innerHTML = '<div class="empty-state"><div class="icon">⚠️</div><h3>Error loading data</h3><p>' + e.message + '</p></div>';
+      });
+    }
+
+    // Wait for DOM to be fully loaded before building layout
+    document.addEventListener('DOMContentLoaded', function() {
+      console.log('DOM loaded, building layout...');
+      
+      // Check if buildLayout exists
+      if (typeof buildLayout === 'function') {
+        buildLayout('Dashboard', 'dashboard', '');
+      } else {
+        console.error('buildLayout function not found! Available functions:', 
+          Object.keys(window).filter(key => typeof window[key] === 'function'));
+      }
+    });
+  </script>
+</body>
+</html>

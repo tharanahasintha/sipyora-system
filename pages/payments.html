@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Payments – Sipyora Institute</title>
+  <link rel="stylesheet" href="../css/style.css"/>
+  <style>
+    /* ── QUICK-PAY PANEL ── */
+    .qp-tabs {
+      display: flex;
+      background: var(--primary);
+      border-radius: 10px;
+      padding: 4px;
+      gap: 4px;
+      margin-bottom: 20px;
+    }
+    .qp-tab {
+      flex: 1;
+      padding: 10px;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text-muted);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .qp-tab.active { background: var(--accent); color: white; }
+
+    /* ── STUDENT PICKER INSIDE MODAL ── */
+    .student-picker-wrap {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--primary);
+    }
+    .picker-toolbar {
+      display: flex;
+      gap: 8px;
+      padding: 10px;
+      background: rgba(255,255,255,0.03);
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .picker-toolbar input {
+      flex: 1;
+      min-width: 120px;
+      padding: 8px 12px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.88rem;
+      outline: none;
+    }
+    .picker-toolbar input:focus { border-color: var(--accent); }
+    .picker-grade-tabs {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+    .pg-btn {
+      padding: 6px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text-muted);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .pg-btn.active { background: var(--info); border-color: var(--info); color: white; }
+    .picker-list {
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    .picker-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .picker-item:last-child { border-bottom: none; }
+    .picker-item:hover { background: rgba(255,255,255,0.05); }
+    .picker-item.selected { background: rgba(233,69,96,0.12); }
+    .picker-item .pi-name { font-weight: 600; font-size: 0.9rem; }
+    .picker-item .pi-meta { font-size: 0.78rem; color: var(--text-muted); margin-top: 2px; }
+    .picker-item .pi-fee { font-size: 0.88rem; font-weight: 700; color: var(--accent2); }
+    .picker-item .pi-paid { font-size: 0.78rem; color: var(--success); font-weight: 600; }
+
+    /* ── BULK PAYMENT TABLE ── */
+    .bulk-grade-section { margin-bottom: 24px; }
+    .bulk-grade-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      background: var(--surface);
+      border-radius: 10px 10px 0 0;
+      border: 1px solid var(--border);
+    }
+    .bulk-grade-header h4 { font-size: 0.95rem; font-weight: 700; flex: 1; }
+    .bulk-student-row {
+      display: grid;
+      grid-template-columns: 1fr auto auto auto;
+      align-items: center;
+      gap: 12px;
+      padding: 11px 16px;
+      border: 1px solid var(--border);
+      border-top: none;
+      background: var(--card);
+      transition: background 0.15s;
+    }
+    .bulk-student-row:last-child { border-radius: 0 0 10px 10px; }
+    .bulk-student-row:hover { background: rgba(255,255,255,0.04); }
+    .bsr-name { font-weight: 600; font-size: 0.9rem; }
+    .bsr-subs { font-size: 0.77rem; color: var(--text-muted); margin-top: 2px; }
+    .bsr-fee { font-size: 0.9rem; font-weight: 700; color: var(--accent2); white-space: nowrap; }
+    .bsr-status { white-space: nowrap; }
+
+    /* search highlight */
+    .hl { background: rgba(233,69,96,0.3); border-radius: 2px; }
+  </style>
+</head>
+<body>
+  <div class="toast-container"></div>
+
+  <!-- ── PAYMENT MODAL ── -->
+  <div class="modal-overlay" id="addPaymentModal">
+    <div class="modal" style="max-width:560px;">
+      <div class="modal-header">
+        <h3>💳 Record Payment</h3>
+        <button class="close-btn" onclick="closeModal('addPaymentModal')">✕</button>
+      </div>
+      <div class="modal-body">
+
+        <!-- STUDENT PICKER -->
+        <div class="form-group">
+          <label>Select Student *</label>
+          <div class="student-picker-wrap">
+            <div class="picker-toolbar">
+              <input type="text" id="pickerSearch" placeholder="🔍  Search by name…" oninput="filterPicker()"/>
+              <div class="picker-grade-tabs" id="pickerGradeTabs">
+                <button class="pg-btn active" data-g="" onclick="setPickerGrade(this,'')">All</button>
+                <button class="pg-btn" data-g="6" onclick="setPickerGrade(this,'6')">G6</button>
+                <button class="pg-btn" data-g="7" onclick="setPickerGrade(this,'7')">G7</button>
+                <button class="pg-btn" data-g="8" onclick="setPickerGrade(this,'8')">G8</button>
+                <button class="pg-btn" data-g="9" onclick="setPickerGrade(this,'9')">G9</button>
+                <button class="pg-btn" data-g="10" onclick="setPickerGrade(this,'10')">G10</button>
+                <button class="pg-btn" data-g="11" onclick="setPickerGrade(this,'11')">G11</button>
+              </div>
+            </div>
+            <div class="picker-list" id="pickerList">
+              <div class="picker-item" style="color:var(--text-muted);justify-content:center;">Loading students…</div>
+            </div>
+          </div>
+          <!-- selected student info -->
+          <div id="selectedStudentBadge" style="display:none;margin-top:10px;padding:12px 16px;background:rgba(233,69,96,0.1);border:1px solid rgba(233,69,96,0.3);border-radius:10px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+            <div>
+              <div id="selStudentName" style="font-weight:700;font-size:0.95rem;"></div>
+              <div id="selStudentMeta" style="font-size:0.8rem;color:var(--text-muted);margin-top:2px;"></div>
+            </div>
+            <div style="text-align:right;">
+              <div id="selStudentFee" style="font-size:1.2rem;font-weight:700;color:var(--accent2);"></div>
+              <div style="font-size:0.75rem;color:var(--text-muted);">Monthly Fee</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group"><label>Month *</label><input type="month" id="payMonth"/></div>
+          <div class="form-group"><label>Amount Paid (Rs) *</label><input type="number" id="payAmount" placeholder="Enter amount"/></div>
+        </div>
+        <div class="form-group">
+          <label>Payment Method</label>
+          <select id="payMethod"><option>Cash</option><option>Bank Transfer</option><option>Online</option></select>
+        </div>
+        <div class="form-group"><label>Notes</label><input type="text" id="payNotes" placeholder="Optional notes"/></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('addPaymentModal')">Cancel</button>
+        <button class="btn btn-success" onclick="savePayment()">💾 Save Payment</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+  <script src="../js/firebase.js"></script>
+  <script src="../js/auth.js"></script>
+  <script src="../js/layout.js"></script>
+  <script>
+    var allStudents = [];       // sorted by grade then name
+    var currentMonth = getMonthYear();
+    var pickerGrade = '';       // selected grade filter in picker
+    var selectedStudentId = ''; // currently picked student
+    var paidThisMonth = {};     // studentId -> true  (for current view month)
+    var activeTab = 'bulk';     // 'bulk' | 'records'
+
+    function onPageReady(user, role) {
+      if (role !== 'admin') {
+        document.getElementById('pageContent').innerHTML = '<div class="empty-state"><div class="icon">🔒</div><h3>Admin Only</h3><p>Only admin can manage payments.</p></div>';
+        return;
+      }
+      document.getElementById('topbarActions').innerHTML = '<button class="btn btn-primary" onclick="openPaymentModal()">+ Record Payment</button>';
+      db.collection('students').orderBy('grade').get().then(function(snap) {
+        // sort by grade asc, then name asc
+        allStudents = snap.docs.map(function(d) { return Object.assign({id: d.id}, d.data()); });
+        allStudents.sort(function(a, b) {
+          if (a.grade !== b.grade) return a.grade - b.grade;
+          return a.name.localeCompare(b.name);
+        });
+        renderPage();
+      });
+    }
+
+    /* ═══════════════════════════════════════════
+       PAGE RENDER
+    ═══════════════════════════════════════════ */
+    function renderPage() {
+      document.getElementById('pageContent').innerHTML = '\
+        <!-- FILTERS ROW -->\
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:20px;">\
+          <input type="month" id="monthFilter" value="' + currentMonth + '" onchange="onMonthChange(this.value)" style="padding:10px 14px;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:\'DM Sans\',sans-serif;font-size:0.9rem;outline:none;"/>\
+          <select id="gradeFilterRec" onchange="loadRecordsTab()" style="padding:10px 14px;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:\'DM Sans\',sans-serif;font-size:0.9rem;outline:none;">\
+            <option value="">All Grades</option>\
+            <option value="6">Grade 6</option><option value="7">Grade 7</option><option value="8">Grade 8</option>\
+            <option value="9">Grade 9</option><option value="10">Grade 10</option><option value="11">Grade 11</option>\
+          </select>\
+          <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">\
+            <span id="monthBadge" class="badge badge-info"></span>\
+          </div>\
+        </div>\
+        <!-- SUMMARY -->\
+        <div id="paySummaryRow" style="margin-bottom:20px;"></div>\
+        <!-- TABS -->\
+        <div class="qp-tabs">\
+          <button class="qp-tab active" id="tabBulk" onclick="switchTab(\'bulk\')">📋 Grade-wise Student List</button>\
+          <button class="qp-tab" id="tabRec" onclick="switchTab(\'records\')">💳 Payment Records</button>\
+        </div>\
+        <!-- CONTENT -->\
+        <div id="tabContent"></div>';
+
+      loadMonthData();
+    }
+
+    function onMonthChange(val) {
+      currentMonth = val;
+      loadMonthData();
+    }
+
+    function switchTab(tab) {
+      activeTab = tab;
+      document.getElementById('tabBulk').classList.toggle('active', tab === 'bulk');
+      document.getElementById('tabRec').classList.toggle('active', tab === 'records');
+      if (tab === 'bulk') renderBulkTab();
+      else loadRecordsTab();
+    }
+
+    /* ═══════════════════════════════════════════
+       LOAD MONTH DATA (payments for month)
+    ═══════════════════════════════════════════ */
+    function loadMonthData() {
+      var badge = document.getElementById('monthBadge');
+      if (badge) badge.textContent = monthLabel(currentMonth);
+
+      db.collection('payments').where('month', '==', currentMonth).get().then(function(snap) {
+        var payments = snap.docs.map(function(d) { return Object.assign({id: d.id}, d.data()); });
+
+        // Build paid map
+        paidThisMonth = {};
+        payments.forEach(function(p) { paidThisMonth[p.studentId] = p; });
+
+        // Summary
+        var totalAmt = payments.reduce(function(s, p) { return s + (p.amount || 0); }, 0);
+        var teacherAmt = calculateTeacherPay(totalAmt);
+        var paidCount = Object.keys(paidThisMonth).length;
+        var unpaidCount = allStudents.length - paidCount;
+
+        var summaryEl = document.getElementById('paySummaryRow');
+        if (summaryEl) {
+          summaryEl.innerHTML = '\
+            <div class="payment-summary">\
+              <div class="pay-box"><div class="amount">' + paidCount + '<span style="font-size:0.9rem;color:var(--text-muted);">/' + allStudents.length + '</span></div><div class="label">Paid Students</div></div>\
+              <div class="pay-box"><div class="amount" style="color:var(--danger);">' + unpaidCount + '</div><div class="label">Unpaid Students</div></div>\
+              <div class="pay-box"><div class="amount">' + formatRs(totalAmt) + '</div><div class="label">Total Collected</div></div>\
+              <div class="pay-box"><div class="amount">' + formatRs(teacherAmt) + '</div><div class="label">Teacher Payouts (75%)</div></div>\
+            </div>';
+        }
+
+        if (activeTab === 'bulk') renderBulkTab();
+        else loadRecordsTab();
+      });
+    }
+
+    /* ═══════════════════════════════════════════
+       BULK / GRADE-WISE TAB
+    ═══════════════════════════════════════════ */
+    function renderBulkTab() {
+      var gradeFilter = document.getElementById('gradeFilterRec') ? document.getElementById('gradeFilterRec').value : '';
+      var content = document.getElementById('tabContent');
+
+      // Group students by grade
+      var grades = [6, 7, 8, 9, 10, 11];
+      var html = '\
+        <div style="margin-bottom:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">\
+          <span style="font-size:0.85rem;color:var(--text-muted);">Filter:</span>\
+          <div style="display:flex;gap:6px;flex-wrap:wrap;" id="bulkGradeBtns">\
+            <button class="pg-btn ' + (gradeFilter===''?'active':'') + '" onclick="setBulkGrade(\'\')">All Grades</button>\
+            ' + grades.map(function(g) { return '<button class="pg-btn ' + (gradeFilter===String(g)?'active':'') + '" onclick="setBulkGrade(\'' + g + '\')">Grade ' + g + '</button>'; }).join('') + '\
+          </div>\
+          <div style="margin-left:auto;">\
+            <input type="text" id="bulkSearch" placeholder="🔍 Search student name…" oninput="renderBulkRows()" style="padding:8px 12px;background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:\'DM Sans\',sans-serif;font-size:0.88rem;outline:none;width:200px;"/>\
+          </div>\
+        </div>\
+        <div id="bulkSections"></div>';
+      content.innerHTML = html;
+      renderBulkRows();
+    }
+
+    function setBulkGrade(g) {
+      var sel = document.getElementById('gradeFilterRec');
+      if (sel) sel.value = g;
+      // Update button states
+      document.querySelectorAll('#bulkGradeBtns .pg-btn').forEach(function(btn) {
+        btn.classList.remove('active');
+      });
+      event.target.classList.add('active');
+      renderBulkRows();
+    }
+
+    function renderBulkRows() {
+      var gradeFilter = document.getElementById('gradeFilterRec') ? document.getElementById('gradeFilterRec').value : '';
+      var searchQ = document.getElementById('bulkSearch') ? document.getElementById('bulkSearch').value.toLowerCase().trim() : '';
+      var container = document.getElementById('bulkSections');
+      if (!container) return;
+
+      var grades = gradeFilter ? [parseInt(gradeFilter)] : [6, 7, 8, 9, 10, 11];
+      var html = '';
+
+      grades.forEach(function(g) {
+        var students = allStudents.filter(function(s) {
+          return s.grade === g && (searchQ === '' || s.name.toLowerCase().indexOf(searchQ) !== -1);
+        });
+        if (students.length === 0) return;
+
+        var paidInGrade = students.filter(function(s) { return paidThisMonth[s.id]; }).length;
+
+        html += '\
+          <div class="bulk-grade-section">\
+            <div class="bulk-grade-header">\
+              <h4>Grade ' + g + '</h4>\
+              <span class="badge badge-success">' + paidInGrade + ' paid</span>\
+              <span class="badge badge-danger">' + (students.length - paidInGrade) + ' unpaid</span>\
+              <span style="font-size:0.8rem;color:var(--text-muted);">' + students.length + ' students</span>\
+            </div>';
+
+        students.forEach(function(s) {
+          var isPaid = !!paidThisMonth[s.id];
+          var payRec = paidThisMonth[s.id];
+          var nameHtml = searchQ ? highlightMatch(s.name, searchQ) : s.name;
+          var subsList = (s.subjects || []).join(', ') || '—';
+
+          html += '\
+            <div class="bulk-student-row">\
+              <div>\
+                <div class="bsr-name">' + nameHtml + '</div>\
+                <div class="bsr-subs">' + subsList + '</div>\
+              </div>\
+              <div class="bsr-fee">' + formatRs(s.monthlyFee || 0) + '</div>\
+              <div class="bsr-status">' +
+                (isPaid
+                  ? '<span class="badge badge-success">✓ Paid ' + formatRs(payRec.amount) + '</span>'
+                  : '<span class="badge badge-danger">Unpaid</span>'
+                ) + '\
+              </div>\
+              <div>' +
+                (isPaid
+                  ? '<button class="btn btn-sm btn-secondary" onclick="openPaymentModalFor(\'' + s.id + '\')" title="Edit/View">✏️</button>'
+                  : '<button class="btn btn-sm btn-primary" onclick="openPaymentModalFor(\'' + s.id + '\')">+ Pay</button>'
+                ) + '\
+              </div>\
+            </div>';
+        });
+
+        html += '</div>';
+      });
+
+      if (html === '') {
+        html = '<div class="empty-state"><div class="icon">🔍</div><h3>No students found</h3><p>Try a different search or grade filter</p></div>';
+      }
+
+      container.innerHTML = html;
+    }
+
+    function highlightMatch(text, q) {
+      var idx = text.toLowerCase().indexOf(q);
+      if (idx === -1) return text;
+      return text.substring(0, idx) + '<span class="hl">' + text.substring(idx, idx + q.length) + '</span>' + text.substring(idx + q.length);
+    }
+
+    /* ═══════════════════════════════════════════
+       PAYMENT RECORDS TAB
+    ═══════════════════════════════════════════ */
+    function loadRecordsTab() {
+      var content = document.getElementById('tabContent');
+      content.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+      var grade = document.getElementById('gradeFilterRec') ? document.getElementById('gradeFilterRec').value : '';
+      db.collection('payments').where('month', '==', currentMonth).orderBy('createdAt', 'desc').get().then(function(snap) {
+        var payments = snap.docs.map(function(d) { return Object.assign({id: d.id}, d.data()); });
+        if (grade) payments = payments.filter(function(p) { return String(p.grade) === grade; });
+        // sort by grade then name
+        payments.sort(function(a, b) {
+          if (a.grade !== b.grade) return a.grade - b.grade;
+          return (a.studentName || '').localeCompare(b.studentName || '');
+        });
+
+        if (payments.length === 0) {
+          content.innerHTML = '<div class="empty-state"><div class="icon">💳</div><h3>No payments recorded</h3><p>Switch to the Grade-wise list to mark payments</p></div>';
+          return;
+        }
+        content.innerHTML = '\
+          <div class="card">\
+            <div class="table-wrap">\
+              <table>\
+                <thead><tr><th>Student</th><th>Grade</th><th>Month</th><th>Amount</th><th>Method</th><th>Teacher Payout</th><th>Date</th><th></th></tr></thead>\
+                <tbody>' +
+                  payments.map(function(p) {
+                    return '<tr><td><strong>' + (p.studentName||'—') + '</strong></td><td><span class="badge badge-info">Grade ' + p.grade + '</span></td><td>' + monthLabel(p.month) + '</td><td style="font-weight:600;color:var(--success);">' + formatRs(p.amount) + '</td><td><span class="badge badge-muted">' + (p.method||'Cash') + '</span></td><td style="color:var(--accent2);">' + formatRs(p.amount * TEACHER_CUT) + '</td><td style="color:var(--text-muted);font-size:0.83rem;">' + formatDate(p.createdAt) + '</td><td><button class="btn btn-sm btn-danger btn-icon" onclick="deletePayment(\'' + p.id + '\')" title="Delete">🗑️</button></td></tr>';
+                  }).join('') +
+                '</tbody>\
+              </table>\
+            </div>\
+          </div>';
+      });
+    }
+
+    /* ═══════════════════════════════════════════
+       STUDENT PICKER (modal)
+    ═══════════════════════════════════════════ */
+    function openPaymentModal() {
+      selectedStudentId = '';
+      pickerGrade = '';
+      document.getElementById('pickerSearch').value = '';
+      document.getElementById('payMonth').value = currentMonth;
+      document.getElementById('payAmount').value = '';
+      document.getElementById('payNotes').value = '';
+      document.getElementById('selectedStudentBadge').style.display = 'none';
+
+      // Reset grade tab buttons
+      document.querySelectorAll('#pickerGradeTabs .pg-btn').forEach(function(b) {
+        b.classList.toggle('active', b.getAttribute('data-g') === '');
+      });
+
+      renderPickerList();
+      openModal('addPaymentModal');
+    }
+
+    // Open modal pre-filled for a specific student
+    function openPaymentModalFor(studentId) {
+      openPaymentModal();
+      // Select the student
+      var student = allStudents.filter(function(s) { return s.id === studentId; })[0];
+      if (student) {
+        // Set grade tab
+        pickerGrade = String(student.grade);
+        document.querySelectorAll('#pickerGradeTabs .pg-btn').forEach(function(b) {
+          b.classList.toggle('active', b.getAttribute('data-g') === pickerGrade);
+        });
+        renderPickerList();
+        selectStudent(studentId);
+      }
+    }
+
+    function setPickerGrade(btn, g) {
+      pickerGrade = g;
+      document.querySelectorAll('#pickerGradeTabs .pg-btn').forEach(function(b) {
+        b.classList.toggle('active', b.getAttribute('data-g') === g);
+      });
+      renderPickerList();
+    }
+
+    function filterPicker() {
+      renderPickerList();
+    }
+
+    function renderPickerList() {
+      var q = document.getElementById('pickerSearch') ? document.getElementById('pickerSearch').value.toLowerCase().trim() : '';
+      var list = document.getElementById('pickerList');
+
+      var filtered = allStudents.filter(function(s) {
+        var gradeMatch = pickerGrade === '' || String(s.grade) === pickerGrade;
+        var nameMatch = q === '' || s.name.toLowerCase().indexOf(q) !== -1;
+        return gradeMatch && nameMatch;
+      });
+
+      if (filtered.length === 0) {
+        list.innerHTML = '<div class="picker-item" style="justify-content:center;color:var(--text-muted);">No students found</div>';
+        return;
+      }
+
+      list.innerHTML = filtered.map(function(s) {
+        var isPaid = !!paidThisMonth[s.id];
+        var nameHtml = q ? highlightMatch(s.name, q) : s.name;
+        return '\
+          <div class="picker-item ' + (s.id === selectedStudentId ? 'selected' : '') + '" onclick="selectStudent(\'' + s.id + '\')">\
+            <div>\
+              <div class="pi-name">' + nameHtml + '</div>\
+              <div class="pi-meta">Grade ' + s.grade + ' &nbsp;·&nbsp; ' + (s.subjects||[]).length + ' subjects</div>\
+            </div>\
+            <div style="text-align:right;">\
+              <div class="pi-fee">' + formatRs(s.monthlyFee || 0) + '</div>\
+              ' + (isPaid ? '<div class="pi-paid">✓ Already Paid</div>' : '') + '\
+            </div>\
+          </div>';
+      }).join('');
+    }
+
+    function selectStudent(id) {
+      selectedStudentId = id;
+      var s = allStudents.filter(function(s) { return s.id === id; })[0];
+      if (!s) return;
+
+      // Update picker UI
+      document.querySelectorAll('.picker-item').forEach(function(el) { el.classList.remove('selected'); });
+      var items = document.querySelectorAll('.picker-item');
+      items.forEach(function(el) {
+        if (el.onclick && el.getAttribute('onclick') && el.getAttribute('onclick').indexOf(id) !== -1) {
+          el.classList.add('selected');
+        }
+      });
+
+      // Show badge
+      var badge = document.getElementById('selectedStudentBadge');
+      badge.style.display = 'flex';
+      document.getElementById('selStudentName').textContent = s.name;
+      document.getElementById('selStudentMeta').textContent = 'Grade ' + s.grade + '  ·  ' + (s.subjects||[]).join(', ');
+      document.getElementById('selStudentFee').textContent = formatRs(s.monthlyFee || 0);
+
+      // Auto-fill amount
+      document.getElementById('payAmount').value = s.monthlyFee || '';
+
+      renderPickerList(); // re-render to show selected state
+    }
+
+    /* ═══════════════════════════════════════════
+       SAVE / DELETE
+    ═══════════════════════════════════════════ */
+    function savePayment() {
+      if (!selectedStudentId) return showToast('Please select a student first', 'error');
+      var s = allStudents.filter(function(s) { return s.id === selectedStudentId; })[0];
+      if (!s) return showToast('Student not found', 'error');
+
+      var month = document.getElementById('payMonth').value;
+      var amount = parseFloat(document.getElementById('payAmount').value);
+      var method = document.getElementById('payMethod').value;
+      var notes = document.getElementById('payNotes').value.trim();
+
+      if (!month || !amount || isNaN(amount)) return showToast('Fill month and amount', 'error');
+
+      db.collection('payments').where('studentId','==',selectedStudentId).where('month','==',month).get().then(function(existing) {
+        if (!existing.empty && !confirm('Payment for ' + s.name + ' in ' + monthLabel(month) + ' already exists. Add another?')) return;
+        db.collection('payments').add({
+          studentId: selectedStudentId,
+          studentName: s.name,
+          grade: parseInt(s.grade),
+          month: month,
+          amount: amount,
+          method: method,
+          notes: notes,
+          teacherShare: amount * TEACHER_CUT,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        }).then(function() {
+          showToast('Payment recorded for ' + s.name + '!', 'success');
+          closeModal('addPaymentModal');
+          selectedStudentId = '';
+          loadMonthData();
+        }).catch(function(e) { showToast('Error: ' + e.message, 'error'); });
+      });
+    }
+
+    function deletePayment(id) {
+      if (!confirm('Delete this payment record?')) return;
+      db.collection('payments').doc(id).delete().then(function() {
+        showToast('Payment deleted', 'info');
+        loadMonthData();
+      });
+    }
+
+    buildLayout('Payments', 'payments', '../');
+  </script>
+</body>
+</html>

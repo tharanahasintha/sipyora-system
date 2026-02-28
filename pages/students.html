@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Students – Sipyora Institute</title>
+  <link rel="stylesheet" href="../css/style.css"/>
+</head>
+<body>
+  <div class="toast-container"></div>
+
+  <!-- ADD STUDENT MODAL -->
+  <div class="modal-overlay" id="addStudentModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>🎓 Add New Student</h3>
+        <button class="close-btn" onclick="closeModal('addStudentModal')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Full Name *</label>
+            <input type="text" id="sName" placeholder="Student name"/>
+          </div>
+          <div class="form-group">
+            <label>Grade *</label>
+            <select id="sGrade" onchange="updateFeePreview()">
+              <option value="">Select Grade</option>
+              <option>6</option><option>7</option><option>8</option>
+              <option>9</option><option>10</option><option>11</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Phone Number</label>
+            <input type="tel" id="sPhone" placeholder="Parent contact"/>
+          </div>
+          <div class="form-group">
+            <label>Guardian Name</label>
+            <input type="text" id="sGuardian" placeholder="Parent/Guardian"/>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Enrolled Subjects *</label>
+          <div class="subject-check-list" id="subjectCheckList">
+            <p style="color:var(--text-muted);font-size:0.85rem;">Loading subjects...</p>
+          </div>
+          <small style="color:var(--text-muted);margin-top:6px;display:block;">⚡ Select 5+ subjects for bundle pricing</small>
+        </div>
+        <div class="form-group">
+          <label>Monthly Fee (Auto-calculated)</label>
+          <div id="feePreview" style="padding:12px 16px;background:var(--primary);border-radius:10px;font-size:1.1rem;font-weight:600;color:var(--accent2);">Rs 0</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('addStudentModal')">Cancel</button>
+        <button class="btn btn-primary" onclick="addStudent()">Add Student</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- VIEW STUDENT MODAL -->
+  <div class="modal-overlay" id="viewStudentModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>📋 Student Details</h3>
+        <button class="close-btn" onclick="closeModal('viewStudentModal')">✕</button>
+      </div>
+      <div class="modal-body" id="viewStudentBody"></div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('viewStudentModal')">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+  <script src="../js/firebase.js"></script>
+  <script src="../js/auth.js"></script>
+  <script src="../js/layout.js"></script>
+  <script>
+    var allStudents = [];
+    var allSubjects = [];
+    var userRole = '';
+
+    function onPageReady(user, role) {
+      userRole = role;
+      if (role === 'admin') {
+        document.getElementById('topbarActions').innerHTML = '<button class="btn btn-primary" onclick="openAddModal()">+ Add Student</button>';
+      }
+      loadData();
+    }
+
+    function loadData() {
+      Promise.all([
+        db.collection('subjects').orderBy('name').get(),
+        db.collection('students').orderBy('name').get()
+      ]).then(function(results) {
+        allSubjects = results[0].docs.map(function(d) { return Object.assign({id: d.id}, d.data()); });
+        allStudents = results[1].docs.map(function(d) { return Object.assign({id: d.id}, d.data()); });
+        renderTable(allStudents);
+      });
+    }
+
+    function renderTable(students) {
+      var content = document.getElementById('pageContent');
+      content.innerHTML = '\
+        <div class="card">\
+          <div class="card-header">\
+            <h3>All Students (' + students.length + ')</h3>\
+            <div class="filters-row" style="margin:0;">\
+              <div class="search-box">\
+                <span class="search-icon">🔍</span>\
+                <input type="text" id="searchInput" placeholder="Search students..." oninput="filterStudents()" style="padding-left:36px;padding:10px 14px 10px 36px;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:\'DM Sans\',sans-serif;font-size:0.9rem;outline:none;"/>\
+              </div>\
+              <select id="gradeFilter" onchange="filterStudents()" style="padding:10px 14px;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:\'DM Sans\',sans-serif;font-size:0.9rem;outline:none;">\
+                <option value="">All Grades</option>\
+                <option>6</option><option>7</option><option>8</option>\
+                <option>9</option><option>10</option><option>11</option>\
+              </select>\
+            </div>\
+          </div>\
+          <div class="table-wrap">\
+            <table>\
+              <thead><tr><th>#</th><th>Name</th><th>Grade</th><th>Subjects</th><th>Monthly Fee</th><th>Guardian</th><th>Actions</th></tr></thead>\
+              <tbody id="studentsBody"></tbody>\
+            </table>\
+          </div>\
+        </div>';
+      renderRows(students);
+    }
+
+    function renderRows(students) {
+      var tbody = document.getElementById('studentsBody');
+      if (!tbody) return;
+      if (students.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state"><div class="icon">🎓</div><h3>No students found</h3><p>Add your first student to get started</p></div></td></tr>';
+        return;
+      }
+      tbody.innerHTML = students.map(function(s, i) {
+        var chips = (s.subjects || []).slice(0,3).map(function(sub) { return '<span class="chip">' + sub + '</span>'; }).join('');
+        var more = (s.subjects || []).length > 3 ? '<span class="chip">+' + ((s.subjects.length) - 3) + '</span>' : '';
+        var actions = '<button class="btn btn-sm btn-secondary btn-icon" onclick="viewStudent(\'' + s.id + '\')" title="View">👁️</button>';
+        if (userRole === 'admin') actions += ' <button class="btn btn-sm btn-danger btn-icon" onclick="removeStudent(\'' + s.id + '\',\'' + s.name.replace(/'/g,'') + '\')" title="Remove">🗑️</button>';
+        return '<tr><td style="color:var(--text-muted);">' + (i+1) + '</td><td><strong>' + s.name + '</strong></td><td><span class="badge badge-info">Grade ' + s.grade + '</span></td><td><div class="subject-chips">' + chips + more + '</div></td><td style="font-weight:600;color:var(--accent2);">' + formatRs(s.monthlyFee || 0) + '</td><td>' + (s.guardian || '—') + '</td><td><div style="display:flex;gap:6px;">' + actions + '</div></td></tr>';
+      }).join('');
+    }
+
+    function filterStudents() {
+      var q = (document.getElementById('searchInput') ? document.getElementById('searchInput').value.toLowerCase() : '');
+      var g = (document.getElementById('gradeFilter') ? document.getElementById('gradeFilter').value : '');
+      var filtered = allStudents.filter(function(s) {
+        return s.name.toLowerCase().indexOf(q) !== -1 && (g === '' || String(s.grade) === g);
+      });
+      renderRows(filtered);
+    }
+
+    function openAddModal() {
+      var list = document.getElementById('subjectCheckList');
+      if (allSubjects.length === 0) {
+        list.innerHTML = '<p style="color:var(--text-muted);font-size:0.85rem;">No subjects available. Add subjects first.</p>';
+      } else {
+        list.innerHTML = allSubjects.map(function(s) {
+          return '<div class="subject-check-item"><input type="checkbox" id="sub_' + s.id + '" value="' + s.name + '" onchange="updateFeePreview()"/><label for="sub_' + s.id + '">' + s.name + '</label></div>';
+        }).join('');
+      }
+      document.getElementById('sName').value = '';
+      document.getElementById('sGrade').value = '';
+      document.getElementById('sPhone').value = '';
+      document.getElementById('sGuardian').value = '';
+      document.getElementById('feePreview').textContent = 'Rs 0';
+      openModal('addStudentModal');
+    }
+
+    function updateFeePreview() {
+      var grade = document.getElementById('sGrade') ? document.getElementById('sGrade').value : '';
+      var checked = document.querySelectorAll('#subjectCheckList input:checked');
+      var fee = grade ? calculateStudentFee(grade, checked.length) : 0;
+      var el = document.getElementById('feePreview');
+      if (el) el.textContent = formatRs(fee);
+    }
+
+    function addStudent() {
+      var name = document.getElementById('sName').value.trim();
+      var grade = document.getElementById('sGrade').value;
+      var phone = document.getElementById('sPhone').value.trim();
+      var guardian = document.getElementById('sGuardian').value.trim();
+      var checked = Array.from(document.querySelectorAll('#subjectCheckList input:checked')).map(function(c) { return c.value; });
+      if (!name || !grade) return showToast('Name and Grade are required', 'error');
+      if (checked.length === 0) return showToast('Select at least one subject', 'error');
+      var monthlyFee = calculateStudentFee(grade, checked.length);
+      db.collection('students').add({
+        name: name, grade: parseInt(grade), phone: phone, guardian: guardian,
+        subjects: checked, monthlyFee: monthlyFee,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      }).then(function() {
+        showToast('Student added!', 'success');
+        closeModal('addStudentModal');
+        loadData();
+      }).catch(function(e) { showToast('Error: ' + e.message, 'error'); });
+    }
+
+    function removeStudent(id, name) {
+      if (!confirm('Remove student "' + name + '"? This cannot be undone.')) return;
+      db.collection('students').doc(id).delete().then(function() {
+        showToast('Student removed', 'info');
+        loadData();
+      }).catch(function(e) { showToast('Error: ' + e.message, 'error'); });
+    }
+
+    function viewStudent(id) {
+      db.collection('students').doc(id).get().then(function(doc) {
+        var s = doc.data();
+        db.collection('payments').where('studentId','==',id).orderBy('createdAt','desc').limit(6).get().then(function(payments) {
+          var chips = (s.subjects||[]).map(function(sub) { return '<span class="chip">' + sub + '</span>'; }).join('');
+          var payRows = payments.empty ? '<p style="color:var(--text-muted);font-size:0.85rem;">No payment records</p>'
+            : payments.docs.map(function(p) {
+              var pd = p.data();
+              return '<div style="display:flex;justify-content:space-between;padding:8px 12px;background:var(--primary);border-radius:8px;margin-bottom:6px;font-size:0.85rem;"><span>' + monthLabel(pd.month) + '</span><span style="color:var(--success);font-weight:600;">' + formatRs(pd.amount) + '</span></div>';
+            }).join('');
+          document.getElementById('viewStudentBody').innerHTML = '\
+            <div style="display:grid;gap:14px;">\
+              <div style="display:flex;align-items:center;gap:16px;">\
+                <div style="width:56px;height:56px;background:var(--accent);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.5rem;font-weight:700;color:white;">' + s.name.charAt(0) + '</div>\
+                <div><h2 style="font-size:1.3rem;">' + s.name + '</h2><span class="badge badge-info">Grade ' + s.grade + '</span></div>\
+              </div>\
+              <div class="grid-2" style="gap:10px;">\
+                <div class="pay-box"><div class="amount" style="font-size:1rem;">' + (s.guardian||'—') + '</div><div class="label">Guardian</div></div>\
+                <div class="pay-box"><div class="amount" style="font-size:1rem;">' + (s.phone||'—') + '</div><div class="label">Phone</div></div>\
+                <div class="pay-box"><div class="amount">' + formatRs(s.monthlyFee) + '</div><div class="label">Monthly Fee</div></div>\
+                <div class="pay-box"><div class="amount">' + (s.subjects||[]).length + '</div><div class="label">Subjects</div></div>\
+              </div>\
+              <div><label style="font-size:0.8rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Enrolled Subjects</label><div class="subject-chips" style="margin-top:8px;">' + chips + '</div></div>\
+              <div><label style="font-size:0.8rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Recent Payments</label><div style="margin-top:8px;">' + payRows + '</div></div>\
+            </div>';
+          openModal('viewStudentModal');
+        });
+      });
+    }
+
+    buildLayout('Students', 'students', '../');
+  </script>
+</body>
+</html>
