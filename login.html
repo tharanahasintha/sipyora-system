@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Login – Sipyora Institute</title>
   <link rel="stylesheet" href="css/style.css"/>
@@ -21,31 +21,29 @@
       <button class="role-tab" onclick="setRole('teacher')">👩‍🏫 Teacher</button>
     </div>
 
-    <div id="loginForm">
-      <div class="form-group">
-        <label>Email Address</label>
-        <input type="email" id="emailInput" placeholder="Enter your email" />
-      </div>
-      <div class="form-group">
-        <label>Password</label>
-        <input type="password" id="passwordInput" placeholder="Enter your password"
-          onkeydown="if(event.key==='Enter') doLogin()" />
-      </div>
-      <div id="loginError" style="color:var(--danger);font-size:0.85rem;margin-bottom:14px;display:none;"></div>
-      <button class="btn btn-primary" onclick="doLogin()" id="loginBtn">Sign In</button>
+    <div class="form-group">
+      <label>Email Address</label>
+      <input type="email" id="emailInput" placeholder="Enter your email" autocomplete="email"/>
     </div>
+    <div class="form-group">
+      <label>Password</label>
+      <input type="password" id="passwordInput" placeholder="Enter your password"
+        autocomplete="current-password"
+        onkeydown="if(event.key==='Enter') doLogin()"/>
+    </div>
+    <div id="loginError" style="color:var(--danger);font-size:0.85rem;margin-bottom:14px;display:none;
+      padding:10px 14px;background:rgba(231,76,60,0.1);border-radius:10px;"></div>
+    <button class="btn btn-primary" onclick="doLogin()" id="loginBtn">Sign In</button>
   </div>
 
-  <!-- Firebase SDKs (compat) -->
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
-  
-  <!-- ONLY load firebase.js, NOT auth.js -->
   <script src="js/firebase.js"></script>
 
   <script>
     var selectedRole = 'admin';
+    var _redirecting = false;
 
     function setRole(role) {
       selectedRole = role;
@@ -54,50 +52,58 @@
       tabs[1].classList.toggle('active', role === 'teacher');
     }
 
-    // Helper function to check admin email
-    function isAdmin(email) {
-      return email === 'admin@sipyora.com' || email.includes('admin');
-    }
+    // ── If already logged in, go straight to dashboard ──
+    // Use a short timeout so Firebase has time to read stored session
+    // before we decide to stay on login page.
+    auth.onAuthStateChanged(function(user) {
+      if (user && !_redirecting) {
+        _redirecting = true;
+        window.location.href = 'index.html';
+      }
+    });
 
     function doLogin() {
       var email = document.getElementById('emailInput').value.trim();
-      var password = document.getElementById('passwordInput').value;
-      var errEl = document.getElementById('loginError');
-      var btn = document.getElementById('loginBtn');
+      var pass  = document.getElementById('passwordInput').value;
+      var btn   = document.getElementById('loginBtn');
+      var err   = document.getElementById('loginError');
 
-      if (!email || !password) {
-        errEl.textContent = 'Please fill in all fields.';
-        errEl.style.display = 'block';
+      if (!email || !pass) {
+        err.textContent = 'Please fill in all fields.';
+        err.style.display = 'block';
         return;
       }
-      
       if (selectedRole === 'admin' && !isAdmin(email)) {
-        errEl.textContent = 'This email is not registered as admin.';
-        errEl.style.display = 'block';
+        err.textContent = 'This email is not registered as admin.';
+        err.style.display = 'block';
         return;
       }
 
-      btn.textContent = 'Signing in...';
+      btn.textContent = 'Signing in…';
       btn.disabled = true;
-      errEl.style.display = 'none';
+      err.style.display = 'none';
 
-      // Use the global auth from firebase.js
-      auth.signInWithEmailAndPassword(email, password)
+      // setPersistence then signIn — this ensures the token is saved to
+      // IndexedDB (LOCAL) before we navigate away
+      auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
         .then(function() {
-          window.location.href = 'index.html';
+          return auth.signInWithEmailAndPassword(email, pass);
+        })
+        .then(function() {
+          // onAuthStateChanged above handles the redirect
         })
         .catch(function(e) {
-          errEl.textContent = e.message || 'Login failed.';
-          errEl.style.display = 'block';
+          var msg = 'Login failed. Check your email and password.';
+          if (e.code === 'auth/user-not-found')    msg = 'No account found with this email.';
+          if (e.code === 'auth/wrong-password')    msg = 'Incorrect password.';
+          if (e.code === 'auth/invalid-email')     msg = 'Invalid email address.';
+          if (e.code === 'auth/too-many-requests') msg = 'Too many attempts. Try again later.';
+          err.textContent = msg;
+          err.style.display = 'block';
           btn.textContent = 'Sign In';
           btn.disabled = false;
         });
     }
-
-    // Redirect if already logged in
-    auth.onAuthStateChanged(function(user) {
-      if (user) window.location.href = 'index.html';
-    });
   </script>
 </body>
 </html>
