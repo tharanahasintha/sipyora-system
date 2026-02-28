@@ -1,107 +1,132 @@
 // ── AUTH.JS ──
-// The key fix: Firebase needs a moment to check IndexedDB for a stored
-// session. During that time onAuthStateChanged fires "null" — which used
-// to redirect to login immediately. We now wait for the FIRST callback
-// before deciding to redirect. A full-screen loader hides the flash.
+//
+// THE GITHUB PAGES PROBLEM:
+// Firebase Auth stores the token in IndexedDB. On GitHub Pages, every
+// link click = full page reload. onAuthStateChanged() fires TWICE:
+//   1st call  → null  (IndexedDB not read yet — async)
+//   2nd call  → user  (IndexedDB read complete)
+//
+// Old code redirected to login on the 1st null call.
+//
+// THE FIX:
+// 1. Show a fullscreen loader immediately (body hidden via CSS)
+// 2. Use auth.authStateReady() — a Promise that resolves only AFTER
+//    Firebase has finished reading the stored token from IndexedDB.
+//    This is the correct way: no race, no timers needed.
+// 3. If still no user after that — THEN redirect.
+// 4. Also store sipyora_logged_in=1 in localStorage as a fast hint
+//    so we know whether to even bother showing the loader.
 
 var currentUser = null;
 var currentRole = null;
-var _authResolved = false;   // becomes true after first onAuthStateChanged callback
 
+// ── LOADER (shown immediately, before any auth check) ──
+(function() {
+  // Only show loader on protected pages (not login.html)
+  var path = window.location.pathname;
+  if (path.endsWith('login.html')) return;
+
+  // Fast check: if we've never logged in, skip the loader
+  if (!localStorage.getItem('sipyora_logged_in')) return;
+
+  var loader = document.createElement('div');
+  loader.id = '_sip_loader';
+  loader.style.cssText = [
+    'position:fixed','inset:0','background:#1a1a2e',
+    'display:flex','flex-direction:column',
+    'align-items:center','justify-content:center',
+    'z-index:99999','transition:opacity 0.3s'
+  ].join(';');
+  loader.innerHTML =
+    '<div style="font-family:serif;font-size:2.2rem;color:#e8eaf0;margin-bottom:28px;letter-spacing:-0.5px">' +
+      'Sip<span style="color:#e94560">yora</span>' +
+    '</div>' +
+    '<div id="_sip_spin" style="width:38px;height:38px;border:3px solid rgba(255,255,255,0.1);' +
+      'border-top-color:#e94560;border-radius:50%;animation:__spin 0.7s linear infinite"></div>' +
+    '<style>@keyframes __spin{to{transform:rotate(360deg)}}</style>';
+  document.body.appendChild(loader);
+})();
+
+function _hideLoader() {
+  var l = document.getElementById('_sip_loader');
+  if (!l) return;
+  l.style.opacity = '0';
+  setTimeout(function(){ if(l.parentNode) l.remove(); }, 320);
+}
+
+// ── MAIN AUTH INIT ──
 function initAuth(onReady) {
+  var path    = window.location.pathname;
+  var isLogin = path.endsWith('login.html');
+  var base    = path.includes('/pages/') ? '../' : '';
 
-  // Show the global loader immediately so the user never sees a blank
-  // page or a flicker of the login screen while Firebase checks storage.
-  _showLoader();
+  // authStateReady() is a Promise that resolves after Firebase has
+  // fully loaded the persisted auth state from IndexedDB.
+  // This completely eliminates the null-before-user race condition.
+  var readyPromise = (typeof auth.authStateReady === 'function')
+    ? auth.authStateReady()           // Firebase 9.22+ compat has this
+    : _fallbackReady();               // polyfill for older SDK versions
 
-  auth.onAuthStateChanged(function(user) {
-
-    // Only act on the FIRST callback (session restore check).
-    // Subsequent calls are real login/logout events.
-    var firstCall = !_authResolved;
-    _authResolved = true;
+  readyPromise.then(function() {
+    var user = auth.currentUser;
 
     if (user) {
       currentUser = user;
       currentRole = isAdmin(user.email) ? 'admin' : 'teacher';
+      localStorage.setItem('sipyora_logged_in', '1');
+      localStorage.setItem('sipyora_role', currentRole);
       _hideLoader();
       if (onReady) onReady(user, currentRole);
 
     } else {
-      currentUser = null;
-      currentRole = null;
-
-      var path       = window.location.pathname;
-      var isLogin    = path.endsWith('login.html');
-      var isRoot     = path.endsWith('/') || path.endsWith('index.html');
-      var base       = path.includes('/pages/') ? '../' : '';
-
+      // Genuinely not logged in
+      localStorage.removeItem('sipyora_logged_in');
+      localStorage.removeItem('sipyora_role');
+      _hideLoader();
       if (!isLogin) {
-        // Redirect to login — but only after a short grace period on the
-        // first call, giving Firebase a second chance if it was slow.
-        if (firstCall) {
-          setTimeout(function() {
-            // Re-check: another onAuthStateChanged may have fired by now
-            if (!currentUser) {
-              window.location.href = base + 'login.html';
-            } else {
-              _hideLoader();
-            }
-          }, 800);
-        } else {
-          // Definite logout — redirect immediately
-          window.location.href = base + 'login.html';
-        }
-      } else {
-        _hideLoader();
+        window.location.replace(base + 'login.html');
       }
     }
+  }).catch(function(e) {
+    console.error('Auth error:', e);
+    _hideLoader();
+    if (!isLogin) window.location.replace(base + 'login.html');
   });
 }
 
-// ── LOADER ──
-function _showLoader() {
-  if (document.getElementById('_authLoader')) return;
-  var loader = document.createElement('div');
-  loader.id = '_authLoader';
-  loader.innerHTML =
-    '<div style="position:fixed;inset:0;background:#1a1a2e;display:flex;flex-direction:column;' +
-    'align-items:center;justify-content:center;z-index:99999;">' +
-      '<div style="font-family:\'DM Serif Display\',serif;font-size:2rem;color:#e8eaf0;letter-spacing:-0.5px;margin-bottom:24px;">' +
-        'Sip<span style="color:#e94560">yora</span>' +
-      '</div>' +
-      '<div style="width:36px;height:36px;border:3px solid rgba(255,255,255,0.1);' +
-      'border-top-color:#e94560;border-radius:50%;animation:_spin 0.7s linear infinite;"></div>' +
-      '<style>@keyframes _spin{to{transform:rotate(360deg)}}</style>' +
-    '</div>';
-  document.body.appendChild(loader);
-}
-
-function _hideLoader() {
-  var loader = document.getElementById('_authLoader');
-  if (loader) {
-    loader.style.opacity = '0';
-    loader.style.transition = 'opacity 0.3s';
-    setTimeout(function(){ loader.remove(); }, 320);
-  }
+// ── POLYFILL for older Firebase compat SDK without authStateReady() ──
+// Wraps onAuthStateChanged to fire only once, with a max wait of 3s.
+function _fallbackReady() {
+  return new Promise(function(resolve) {
+    var resolved = false;
+    var timer = setTimeout(function() {
+      if (!resolved) { resolved = true; resolve(); }
+    }, 3000);
+    var unsub = auth.onAuthStateChanged(function() {
+      clearTimeout(timer);
+      if (!resolved) {
+        resolved = true;
+        unsub();
+        // Small defer so auth.currentUser is set before we read it
+        setTimeout(resolve, 50);
+      }
+    });
+  });
 }
 
 // ── LOGOUT ──
 function logoutUser() {
-  _authResolved = false;   // reset so next login works cleanly
+  localStorage.removeItem('sipyora_logged_in');
+  localStorage.removeItem('sipyora_role');
   auth.signOut().then(function() {
     var path = window.location.pathname;
     var base = path.includes('/pages/') ? '../' : '';
-    window.location.href = base + 'login.html';
+    window.location.replace(base + 'login.html');
   });
 }
 
-// ── HELPERS ──
 function requireAdmin() {
-  if (currentRole !== 'admin') {
-    showToast('Admin access required', 'error');
-    return false;
-  }
+  if (currentRole !== 'admin') { showToast('Admin access required','error'); return false; }
   return true;
 }
 
@@ -110,7 +135,6 @@ function updateUserBadge() {
   var roleEl   = document.getElementById('userRole');
   var avatarEl = document.getElementById('userAvatar');
   if (!currentUser) return;
-
   if (currentRole === 'teacher') {
     db.collection('teachers').where('email','==',currentUser.email).limit(1).get()
       .then(function(snap) {

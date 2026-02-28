@@ -17,8 +17,8 @@
     </div>
 
     <div class="role-tabs">
-      <button class="role-tab active" onclick="setRole('admin')">🔐 Admin</button>
-      <button class="role-tab" onclick="setRole('teacher')">👩‍🏫 Teacher</button>
+      <button class="role-tab active" id="tabAdmin"  onclick="setRole('admin')">🔐 Admin</button>
+      <button class="role-tab"        id="tabTeacher" onclick="setRole('teacher')">👩‍🏫 Teacher</button>
     </div>
 
     <div class="form-group">
@@ -31,8 +31,11 @@
         autocomplete="current-password"
         onkeydown="if(event.key==='Enter') doLogin()"/>
     </div>
-    <div id="loginError" style="color:var(--danger);font-size:0.85rem;margin-bottom:14px;display:none;
-      padding:10px 14px;background:rgba(231,76,60,0.1);border-radius:10px;"></div>
+
+    <div id="loginError" style="display:none;color:var(--danger);font-size:0.85rem;
+      margin-bottom:14px;padding:10px 14px;background:rgba(231,76,60,0.1);
+      border-radius:10px;border:1px solid rgba(231,76,60,0.2);"></div>
+
     <button class="btn btn-primary" onclick="doLogin()" id="loginBtn">Sign In</button>
   </div>
 
@@ -40,66 +43,72 @@
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
   <script src="js/firebase.js"></script>
-
   <script>
-    var selectedRole = 'admin';
-    var _redirecting = false;
+    var selectedRole  = 'admin';
+    var alreadyGoing  = false;   // prevent double-redirect
+
+    // ── If already logged in → go straight to dashboard ──
+    // Wait for authStateReady so we don't check before IndexedDB is read
+    var readyP = (typeof auth.authStateReady === 'function')
+      ? auth.authStateReady()
+      : new Promise(function(res) {
+          var u = auth.onAuthStateChanged(function(){ u(); setTimeout(res,50); });
+        });
+
+    readyP.then(function() {
+      if (auth.currentUser && !alreadyGoing) {
+        alreadyGoing = true;
+        window.location.replace('index.html');
+      }
+    });
 
     function setRole(role) {
       selectedRole = role;
-      var tabs = document.querySelectorAll('.role-tab');
-      tabs[0].classList.toggle('active', role === 'admin');
-      tabs[1].classList.toggle('active', role === 'teacher');
+      document.getElementById('tabAdmin').classList.toggle('active',   role === 'admin');
+      document.getElementById('tabTeacher').classList.toggle('active', role === 'teacher');
     }
 
-    // ── If already logged in, go straight to dashboard ──
-    // Use a short timeout so Firebase has time to read stored session
-    // before we decide to stay on login page.
-    auth.onAuthStateChanged(function(user) {
-      if (user && !_redirecting) {
-        _redirecting = true;
-        window.location.href = 'index.html';
-      }
-    });
+    function showErr(msg) {
+      var e = document.getElementById('loginError');
+      e.textContent = msg;
+      e.style.display = 'block';
+    }
 
     function doLogin() {
       var email = document.getElementById('emailInput').value.trim();
       var pass  = document.getElementById('passwordInput').value;
       var btn   = document.getElementById('loginBtn');
-      var err   = document.getElementById('loginError');
+      document.getElementById('loginError').style.display = 'none';
 
-      if (!email || !pass) {
-        err.textContent = 'Please fill in all fields.';
-        err.style.display = 'block';
-        return;
-      }
+      if (!email || !pass) { showErr('Please fill in all fields.'); return; }
       if (selectedRole === 'admin' && !isAdmin(email)) {
-        err.textContent = 'This email is not registered as admin.';
-        err.style.display = 'block';
-        return;
+        showErr('This email is not registered as admin.'); return;
       }
 
       btn.textContent = 'Signing in…';
       btn.disabled = true;
-      err.style.display = 'none';
 
-      // setPersistence then signIn — this ensures the token is saved to
-      // IndexedDB (LOCAL) before we navigate away
+      // Set LOCAL persistence first — this ensures the token is written
+      // to IndexedDB (not just memory/session) before we navigate away.
       auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL)
         .then(function() {
           return auth.signInWithEmailAndPassword(email, pass);
         })
         .then(function() {
-          // onAuthStateChanged above handles the redirect
+          localStorage.setItem('sipyora_logged_in', '1');
+          localStorage.setItem('sipyora_role', selectedRole);
+          alreadyGoing = true;
+          window.location.replace('index.html');
         })
         .catch(function(e) {
-          var msg = 'Login failed. Check your email and password.';
-          if (e.code === 'auth/user-not-found')    msg = 'No account found with this email.';
-          if (e.code === 'auth/wrong-password')    msg = 'Incorrect password.';
-          if (e.code === 'auth/invalid-email')     msg = 'Invalid email address.';
-          if (e.code === 'auth/too-many-requests') msg = 'Too many attempts. Try again later.';
-          err.textContent = msg;
-          err.style.display = 'block';
+          var msgs = {
+            'auth/user-not-found':    'No account found with this email.',
+            'auth/wrong-password':    'Incorrect password.',
+            'auth/invalid-email':     'Invalid email address.',
+            'auth/invalid-credential':'Incorrect email or password.',
+            'auth/too-many-requests': 'Too many attempts. Wait a few minutes.',
+          };
+          showErr(msgs[e.code] || 'Login failed. Check your credentials.');
           btn.textContent = 'Sign In';
           btn.disabled = false;
         });
